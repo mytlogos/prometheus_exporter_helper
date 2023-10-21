@@ -2,9 +2,13 @@ package helper
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/kingpin/v2"
@@ -153,6 +157,34 @@ func (e *ExporterHelper) zitiListener() net.Listener {
 	return listener
 }
 
+func (e *ExporterHelper) createListener(address string) (net.Listener, error) {
+	listenType := "tcp"
+
+	// check if unix socket
+	if strings.HasPrefix(address, "/") && (strings.HasSuffix(address, ".socket") || strings.HasSuffix(address, ".sock")) {
+		listenType = "unix"
+
+		// Cleanup the sockfile.
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-c
+			os.Remove(address)
+			os.Exit(1)
+		}()
+
+		// if we exit "normally" without SIGTERM signal, cleanup too
+		defer func() {
+			removeErr := os.Remove(address)
+
+			if removeErr != nil {
+				level.Warn(e.logger).Log("msg", fmt.Sprintf("Could not remove unix socket: %s", address))
+			}
+		}()
+	}
+	return net.Listen(listenType, address)
+}
+
 func (e *ExporterHelper) listenAndServe(server *http.Server) error {
 	logger := e.Logger()
 
@@ -185,7 +217,7 @@ func (e *ExporterHelper) listenAndServe(server *http.Server) error {
 	listeners := make([]net.Listener, 0, len(*e.toolkitFlags.WebListenAddresses))
 
 	for _, address := range *e.toolkitFlags.WebListenAddresses {
-		listener, err := net.Listen("tcp", address)
+		listener, err := e.createListener(address)
 		if err != nil {
 			return err
 		}
