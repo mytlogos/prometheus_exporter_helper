@@ -1,4 +1,4 @@
-module git.lan/mytlogos/prometheus_exporter_helper
+module github.com/mytlogos/prometheus_exporter_helper
 
 go 1.21.1
 
