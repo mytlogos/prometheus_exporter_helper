@@ -60,7 +60,7 @@ func (e *ExporterHelper) InitFlags() {
 		"web.telemetry-path", "Path under which to expose metrics",
 	).Default("/metrics").String()
 
-	e.toolkitFlags = webflag.AddFlags(kingpin.CommandLine, ":9633")
+	e.toolkitFlags = webflag.AddFlags(kingpin.CommandLine, e.DefaultAddress)
 
 	e.promlogConfig = &promlog.Config{}
 	flag.AddFlags(kingpin.CommandLine, e.promlogConfig)
