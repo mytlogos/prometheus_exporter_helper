@@ -173,9 +173,9 @@ func (e *ExporterHelper) zitiListener() net.Listener {
 
 	if stat, err := os.Stat(*e.zitiConfig.IdentityFile); err != nil || stat.IsDir() {
 		if err != nil {
-			level.Error(e.logger).Log("err", err)
+			level.Warn(e.logger).Log("err", err)
 		}
-		level.Error(e.logger).Log("msg", "identity file likely not accessible - ignoring")
+		level.Warn(e.logger).Log("msg", "identity file likely not accessible - ignoring")
 		return nil
 	}
 
