@@ -16,6 +16,8 @@ import (
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/openziti/sdk-golang/ziti"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
@@ -31,14 +33,18 @@ type zitiFlagConfig struct {
 }
 
 type ExporterHelper struct {
-	ExporterName   string
-	Description    string
-	DefaultAddress string
-	metricsPath    *string
-	toolkitFlags   *web.FlagConfig
-	promlogConfig  *promlog.Config
-	zitiConfig     *zitiFlagConfig
-	logger         log.Logger
+	ExporterName           string
+	Description            string
+	DefaultAddress         string
+	metricsPath            *string
+	disableExporterMetrics *bool
+	landingPage            *bool
+	maxRequests            *int
+
+	toolkitFlags  *web.FlagConfig
+	promlogConfig *promlog.Config
+	zitiConfig    *zitiFlagConfig
+	logger        log.Logger
 }
 
 func NewHelper(name, description, address string) ExporterHelper {
@@ -70,7 +76,20 @@ func (e *ExporterHelper) InitFlags() {
 	).Default(e.ExporterName).String()
 	e.zitiConfig.ZitiOnly = kingpin.Flag(
 		"web.ziti.only", "If it listens on the ziti network only. Requires a valid ziti config.",
+	).Default("false").Bool()
+
+	e.disableExporterMetrics = kingpin.Flag(
+		"web.disable-exporter-metrics",
+		"Exclude metrics about the exporter itself (promhttp_*, process_*, go_*).",
 	).Bool()
+	e.landingPage = kingpin.Flag(
+		"web.landing-page",
+		"Enable or disable the landing page on root path '/'",
+	).Default("true").Bool()
+	e.maxRequests = kingpin.Flag(
+		"web.max-requests",
+		"Maximum number of parallel scrape requests. Use 0 to disable.",
+	).Default("2").Int()
 }
 
 func (e *ExporterHelper) Logger() log.Logger {
@@ -80,8 +99,34 @@ func (e *ExporterHelper) Logger() log.Logger {
 	return e.logger
 }
 
-func (e *ExporterHelper) ListenAndServe() {
-	e.ListenAndServeHandler(promhttp.Handler())
+func (e *ExporterHelper) ListenAndServe(collector prometheus.Collector) {
+	r := prometheus.NewRegistry()
+	r.MustRegister(version.NewCollector(e.ExporterName))
+
+	if err := r.Register(collector); err != nil {
+		level.Error(e.logger).Log("msg", "Couldn't register exporter collector", "err", err)
+		os.Exit(1)
+	}
+
+	handler := promhttp.HandlerFor(
+		prometheus.Gatherers{r},
+		promhttp.HandlerOpts{
+			ErrorHandling:       promhttp.ContinueOnError,
+			MaxRequestsInFlight: *e.maxRequests,
+			EnableOpenMetrics:   true,
+		},
+	)
+
+	if !*e.disableExporterMetrics {
+		handler = promhttp.InstrumentMetricHandler(
+			r, handler,
+		)
+		r.MustRegister(
+			collectors.NewGoCollector(),
+			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		)
+	}
+	e.ListenAndServeHandler(handler)
 }
 
 func (e *ExporterHelper) ListenAndServeHandler(promHandler http.Handler) {
@@ -89,6 +134,7 @@ func (e *ExporterHelper) ListenAndServeHandler(promHandler http.Handler) {
 
 	level.Info(logger).Log("msg", "Starting "+e.ExporterName, "version", version.Info())
 	level.Info(logger).Log("msg", "Build context", "build_context", version.BuildContext())
+
 	http.Handle(*e.metricsPath, promHandler)
 
 	if *e.metricsPath != "/" && *e.metricsPath != "" {
