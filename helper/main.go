@@ -33,9 +33,18 @@ type zitiFlagConfig struct {
 }
 
 type ExporterHelper struct {
-	ExporterName           string
-	Description            string
-	DefaultAddress         string
+	// what name to use for the exporter
+	// must be of format [a-ZA-Z0-9_], hyphens "-" are not allowed
+	ExporterName string
+	// help description of the program
+	Description string
+	// the address it will listen on by default if not otherwise specified
+	// should have the form of "<interface-address>:<port>"
+	// the form ":<port>" will use all available interfaces
+	DefaultAddress string
+	// for interopability with other server like things like gonic
+	// by default it uses http.Handle and thus the default mux
+	HandlerSetter          func(string, http.Handler)
 	metricsPath            *string
 	disableExporterMetrics *bool
 	landingPage            *bool
@@ -52,6 +61,7 @@ func NewHelper(name, description, address string) ExporterHelper {
 		ExporterName:   name,
 		Description:    description,
 		DefaultAddress: address,
+		HandlerSetter:  http.Handle,
 	}
 }
 
@@ -99,13 +109,16 @@ func (e *ExporterHelper) Logger() log.Logger {
 	return e.logger
 }
 
-func (e *ExporterHelper) ListenAndServe(collector prometheus.Collector) {
+// create the prometheus handler and register the collector if not nil
+func (e *ExporterHelper) CreatePromHandler(collector prometheus.Collector) http.Handler {
 	r := prometheus.NewRegistry()
 	r.MustRegister(version.NewCollector(e.ExporterName))
 
-	if err := r.Register(collector); err != nil {
-		level.Error(e.logger).Log("msg", "Couldn't register exporter collector", "err", err)
-		os.Exit(1)
+	if collector != nil {
+		if err := r.Register(collector); err != nil {
+			level.Error(e.logger).Log("msg", "Couldn't register exporter collector", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	handler := promhttp.HandlerFor(
@@ -126,6 +139,13 @@ func (e *ExporterHelper) ListenAndServe(collector prometheus.Collector) {
 			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		)
 	}
+	return handler
+}
+
+// use the prometheus handler configured via flags
+// a nil collector will be ignored
+func (e *ExporterHelper) ListenAndServe(collector prometheus.Collector) {
+	handler := e.CreatePromHandler(collector)
 	e.ListenAndServeHandler(handler)
 }
 
@@ -135,9 +155,9 @@ func (e *ExporterHelper) ListenAndServeHandler(promHandler http.Handler) {
 	level.Info(logger).Log("msg", "Starting "+e.ExporterName, "version", version.Info())
 	level.Info(logger).Log("msg", "Build context", "build_context", version.BuildContext())
 
-	http.Handle(*e.metricsPath, promHandler)
+	e.HandlerSetter(*e.metricsPath, promHandler)
 
-	if *e.metricsPath != "/" && *e.metricsPath != "" {
+	if *e.metricsPath != "/" && *e.metricsPath != "" && *e.landingPage {
 		landingConfig := web.LandingConfig{
 			Name:        e.ExporterName,
 			Description: e.Description,
@@ -154,7 +174,7 @@ func (e *ExporterHelper) ListenAndServeHandler(promHandler http.Handler) {
 			level.Error(logger).Log("err", err)
 			os.Exit(1)
 		}
-		http.Handle("/", landingPage)
+		e.HandlerSetter("/", landingPage)
 	}
 
 	srv := &http.Server{}
@@ -165,7 +185,7 @@ func (e *ExporterHelper) ListenAndServeHandler(promHandler http.Handler) {
 	}
 }
 
-func (e *ExporterHelper) zitiListener() net.Listener {
+func (e *ExporterHelper) CreateZitiListener() net.Listener {
 	options := ziti.ListenOptions{
 		ConnectTimeout: 5 * time.Minute,
 		MaxConnections: 3,
@@ -235,7 +255,7 @@ func (e *ExporterHelper) listenAndServe(server *http.Server) error {
 	logger := e.Logger()
 
 	if *e.zitiConfig.ZitiOnly {
-		listener := e.zitiListener()
+		listener := e.CreateZitiListener()
 
 		if listener == nil {
 			level.Error(logger).Log("msg", "could not create ziti listener in ziti only mode")
@@ -271,7 +291,7 @@ func (e *ExporterHelper) listenAndServe(server *http.Server) error {
 		listeners = append(listeners, listener)
 	}
 
-	listener := e.zitiListener()
+	listener := e.CreateZitiListener()
 
 	if listener != nil {
 		listeners = append(listeners, listener)
