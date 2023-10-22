@@ -151,10 +151,14 @@ func (e *ExporterHelper) ListenAndServeCollector(collector prometheus.Collector)
 
 func (e *ExporterHelper) ListenAndServeHandler(promHandler http.Handler) {
 	srv := &http.Server{}
-	e.ListenAndServe(srv, promHandler)
+
+	if err := e.ListenAndServe(srv, promHandler); err != nil {
+		level.Error(e.logger).Log("err", err)
+		os.Exit(1)
+	}
 }
 
-func (e *ExporterHelper) ListenAndServe(server *http.Server, promHandler http.Handler) {
+func (e *ExporterHelper) ListenAndServe(server *http.Server, promHandler http.Handler) error {
 	logger := e.Logger()
 
 	level.Info(logger).Log("msg", "Starting "+e.ExporterName, "version", version.Info())
@@ -182,10 +186,10 @@ func (e *ExporterHelper) ListenAndServe(server *http.Server, promHandler http.Ha
 		e.HandlerSetter("/", landingPage)
 	}
 
-	if err := e.listenAndServe(server); err != nil {
-		level.Error(logger).Log("err", err)
-		os.Exit(1)
+	if err := e.listenAndServe(server); !errors.Is(err, http.ErrServerClosed) {
+		return err
 	}
+	return nil
 }
 
 func (e *ExporterHelper) CreateZitiListener() net.Listener {
