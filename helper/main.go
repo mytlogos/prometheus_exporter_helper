@@ -144,12 +144,17 @@ func (e *ExporterHelper) CreatePromHandler(collector prometheus.Collector) http.
 
 // use the prometheus handler configured via flags
 // a nil collector will be ignored
-func (e *ExporterHelper) ListenAndServe(collector prometheus.Collector) {
+func (e *ExporterHelper) ListenAndServeCollector(collector prometheus.Collector) {
 	handler := e.CreatePromHandler(collector)
 	e.ListenAndServeHandler(handler)
 }
 
 func (e *ExporterHelper) ListenAndServeHandler(promHandler http.Handler) {
+	srv := &http.Server{}
+	e.ListenAndServe(srv, promHandler)
+}
+
+func (e *ExporterHelper) ListenAndServe(server *http.Server, promHandler http.Handler) {
 	logger := e.Logger()
 
 	level.Info(logger).Log("msg", "Starting "+e.ExporterName, "version", version.Info())
@@ -177,9 +182,7 @@ func (e *ExporterHelper) ListenAndServeHandler(promHandler http.Handler) {
 		e.HandlerSetter("/", landingPage)
 	}
 
-	srv := &http.Server{}
-
-	if err := e.listenAndServe(srv); err != nil {
+	if err := e.listenAndServe(server); err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)
 	}
