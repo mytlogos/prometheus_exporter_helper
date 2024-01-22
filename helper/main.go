@@ -44,11 +44,15 @@ type ExporterHelper struct {
 	DefaultAddress string
 	// for interopability with other server like things like gonic
 	// by default it uses http.Handle and thus the default mux
-	HandlerSetter          func(string, http.Handler)
-	metricsPath            *string
-	disableExporterMetrics *bool
-	landingPage            *bool
-	maxRequests            *int
+	HandlerSetter func(string, http.Handler)
+	// path to the metrics, defaults to /metrics
+	MetricsPath *string
+	// disable metrics about the process itself, by default false
+	DisableExporterMetrics *bool
+	// enable the landing page for path '/', by default true
+	LandingPage *bool
+	// the maximum number of concurrent scrape requests
+	MaxRequests *int
 
 	toolkitFlags  *web.FlagConfig
 	promlogConfig *promlog.Config
@@ -66,7 +70,7 @@ func NewHelper(name, description, address string) ExporterHelper {
 }
 
 func (e *ExporterHelper) InitFlags() {
-	e.metricsPath = kingpin.Flag(
+	e.MetricsPath = kingpin.Flag(
 		"web.telemetry-path", "Path under which to expose metrics",
 	).Default("/metrics").String()
 
@@ -88,15 +92,15 @@ func (e *ExporterHelper) InitFlags() {
 		"web.ziti.only", "If it listens on the ziti network only. Requires a valid ziti config.",
 	).Default("false").Bool()
 
-	e.disableExporterMetrics = kingpin.Flag(
+	e.DisableExporterMetrics = kingpin.Flag(
 		"web.disable-exporter-metrics",
 		"Exclude metrics about the exporter itself (promhttp_*, process_*, go_*).",
 	).Bool()
-	e.landingPage = kingpin.Flag(
+	e.LandingPage = kingpin.Flag(
 		"web.landing-page",
 		"Enable or disable the landing page on root path '/'",
 	).Default("true").Bool()
-	e.maxRequests = kingpin.Flag(
+	e.MaxRequests = kingpin.Flag(
 		"web.max-requests",
 		"Maximum number of parallel scrape requests. Use 0 to disable.",
 	).Default("2").Int()
@@ -125,12 +129,12 @@ func (e *ExporterHelper) CreatePromHandler(collector prometheus.Collector) http.
 		prometheus.Gatherers{r},
 		promhttp.HandlerOpts{
 			ErrorHandling:       promhttp.ContinueOnError,
-			MaxRequestsInFlight: *e.maxRequests,
+			MaxRequestsInFlight: *e.MaxRequests,
 			EnableOpenMetrics:   true,
 		},
 	)
 
-	if !*e.disableExporterMetrics {
+	if !*e.DisableExporterMetrics {
 		handler = promhttp.InstrumentMetricHandler(
 			r, handler,
 		)
@@ -164,16 +168,16 @@ func (e *ExporterHelper) ListenAndServe(server *http.Server, promHandler http.Ha
 	level.Info(logger).Log("msg", "Starting "+e.ExporterName, "version", version.Info())
 	level.Info(logger).Log("msg", "Build context", "build_context", version.BuildContext())
 
-	e.HandlerSetter(*e.metricsPath, promHandler)
+	e.HandlerSetter(*e.MetricsPath, promHandler)
 
-	if *e.metricsPath != "/" && *e.metricsPath != "" && *e.landingPage {
+	if *e.MetricsPath != "/" && *e.MetricsPath != "" && *e.LandingPage {
 		landingConfig := web.LandingConfig{
 			Name:        e.ExporterName,
 			Description: e.Description,
 			Version:     version.Info(),
 			Links: []web.LandingLinks{
 				{
-					Address: *e.metricsPath,
+					Address: *e.MetricsPath,
 					Text:    "Metrics",
 				},
 			},
