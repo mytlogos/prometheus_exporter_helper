@@ -18,6 +18,7 @@ import (
 	"github.com/openziti/sdk-golang/ziti"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+	versionCollector "github.com/prometheus/client_golang/prometheus/collectors/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
@@ -116,7 +117,7 @@ func (e *ExporterHelper) Logger() log.Logger {
 // create the prometheus handler and register the collector if not nil
 func (e *ExporterHelper) CreatePromHandler(collector prometheus.Collector) http.Handler {
 	r := prometheus.NewRegistry()
-	r.MustRegister(version.NewCollector(e.ExporterName))
+	r.MustRegister(versionCollector.NewCollector(e.ExporterName))
 
 	if collector != nil {
 		if err := r.Register(collector); err != nil {
