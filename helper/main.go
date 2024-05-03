@@ -9,13 +9,11 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/coreos/go-systemd/activation"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
-	"github.com/openziti/sdk-golang/ziti"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	versionCollector "github.com/prometheus/client_golang/prometheus/collectors/version"
@@ -26,12 +24,6 @@ import (
 	"github.com/prometheus/exporter-toolkit/web"
 	webflag "github.com/prometheus/exporter-toolkit/web/kingpinflag"
 )
-
-type zitiFlagConfig struct {
-	IdentityFile *string
-	ServiceName  *string
-	ZitiOnly     *bool
-}
 
 type ExporterHelper struct {
 	// what name to use for the exporter
@@ -57,8 +49,16 @@ type ExporterHelper struct {
 
 	toolkitFlags  *web.FlagConfig
 	promlogConfig *promlog.Config
-	zitiConfig    *zitiFlagConfig
 	logger        log.Logger
+	serverHelper  []ServerHelper
+}
+
+type ServerHelper interface {
+	InitFlags()
+
+	IsOnlyListener() bool
+
+	CreateListener() net.Listener
 }
 
 func NewHelper(name, description, address string) ExporterHelper {
@@ -67,7 +67,12 @@ func NewHelper(name, description, address string) ExporterHelper {
 		Description:    description,
 		DefaultAddress: address,
 		HandlerSetter:  http.Handle,
+		serverHelper:   []ServerHelper{},
 	}
+}
+
+func (e *ExporterHelper) AddHelper(helper ServerHelper) {
+	e.serverHelper = append(e.serverHelper, helper)
 }
 
 func (e *ExporterHelper) InitFlags() {
@@ -82,17 +87,6 @@ func (e *ExporterHelper) InitFlags() {
 	kingpin.Version(version.Print(e.ExporterName))
 	kingpin.HelpFlag.Short('h')
 
-	e.zitiConfig = &zitiFlagConfig{}
-	e.zitiConfig.IdentityFile = kingpin.Flag(
-		"web.ziti.identity", "Path of the ziti identity json file. Ignored if path does not exist",
-	).Default("./identity.json").String()
-	e.zitiConfig.ServiceName = kingpin.Flag(
-		"web.ziti.service-name", "Name of the service to bind to. Stops if it wants to bind but does not exist",
-	).Default(e.ExporterName).String()
-	e.zitiConfig.ZitiOnly = kingpin.Flag(
-		"web.ziti.only", "If it listens on the ziti network only. Requires a valid ziti config.",
-	).Default("false").Bool()
-
 	e.DisableExporterMetrics = kingpin.Flag(
 		"web.disable-exporter-metrics",
 		"Exclude metrics about the exporter itself (promhttp_*, process_*, go_*).",
@@ -105,6 +99,10 @@ func (e *ExporterHelper) InitFlags() {
 		"web.max-requests",
 		"Maximum number of parallel scrape requests. Use 0 to disable.",
 	).Default("2").Int()
+
+	for _, helper := range e.serverHelper {
+		helper.InitFlags()
+	}
 }
 
 func (e *ExporterHelper) Logger() log.Logger {
@@ -197,44 +195,6 @@ func (e *ExporterHelper) ListenAndServe(server *http.Server, promHandler http.Ha
 	return nil
 }
 
-func (e *ExporterHelper) CreateZitiListener() net.Listener {
-	options := ziti.ListenOptions{
-		ConnectTimeout: 5 * time.Minute,
-		MaxConnections: 3,
-	}
-
-	if stat, err := os.Stat(*e.zitiConfig.IdentityFile); err != nil || stat.IsDir() {
-		if err != nil {
-			level.Warn(e.logger).Log("err", err)
-		}
-		level.Warn(e.logger).Log("msg", "identity file likely not accessible - ignoring")
-		return nil
-	}
-
-	// Get identity config
-	cfg, err := ziti.NewConfigFromFile(*e.zitiConfig.IdentityFile)
-
-	if err != nil {
-		panic(err)
-	}
-
-	ctx, err := ziti.NewContext(cfg)
-
-	if err != nil {
-		panic(err)
-	}
-
-	listener, err := ctx.ListenWithOptions(*e.zitiConfig.ServiceName, &options)
-
-	if err != nil {
-		level.Error(e.logger).Log("msg", "error binding service", "err", err)
-		os.Exit(1)
-	}
-
-	level.Info(e.logger).Log("msg", "listening for requests", "service", e.zitiConfig.ServiceName)
-	return listener
-}
-
 func (e *ExporterHelper) createListener(address string) (net.Listener, error) {
 	listenType := "tcp"
 
@@ -266,14 +226,16 @@ func (e *ExporterHelper) createListener(address string) (net.Listener, error) {
 func (e *ExporterHelper) listenAndServe(server *http.Server) error {
 	logger := e.Logger()
 
-	if *e.zitiConfig.ZitiOnly {
-		listener := e.CreateZitiListener()
+	for _, helper := range e.serverHelper {
+		if helper.IsOnlyListener() {
+			listener := helper.CreateListener()
 
-		if listener == nil {
-			level.Error(logger).Log("msg", "could not create ziti listener in ziti only mode")
-			os.Exit(1)
+			if listener == nil {
+				level.Error(logger).Log("msg", "could not create ziti listener in ziti only mode")
+				os.Exit(1)
+			}
+			return web.ServeMultiple([]net.Listener{listener}, server, e.toolkitFlags, logger)
 		}
-		return web.ServeMultiple([]net.Listener{listener}, server, e.toolkitFlags, logger)
 	}
 
 	if e.toolkitFlags.WebSystemdSocket == nil && (e.toolkitFlags.WebListenAddresses == nil || len(*e.toolkitFlags.WebListenAddresses) == 0) {
@@ -303,10 +265,12 @@ func (e *ExporterHelper) listenAndServe(server *http.Server) error {
 		listeners = append(listeners, listener)
 	}
 
-	listener := e.CreateZitiListener()
+	for _, helper := range e.serverHelper {
+		listener := helper.CreateListener()
 
-	if listener != nil {
-		listeners = append(listeners, listener)
+		if listener != nil {
+			listeners = append(listeners, listener)
+		}
 	}
 	return web.ServeMultiple(listeners, server, e.toolkitFlags, logger)
 }
