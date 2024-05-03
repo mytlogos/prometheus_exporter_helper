@@ -1,4 +1,4 @@
-package helper
+package ziti
 
 import (
 	"net"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log/level"
+	"github.com/mytlogos/prometheus_exporter_helper/helper"
 	"github.com/openziti/sdk-golang/ziti"
 )
 
@@ -18,7 +19,7 @@ type zitiFlagConfig struct {
 
 type ZitiServerHelper struct {
 	zitiConfig     *zitiFlagConfig
-	ExporterHelper *ExporterHelper
+	ExporterHelper *helper.ExporterHelper
 }
 
 // InitFlags implements ServerHelper.
@@ -79,4 +80,4 @@ func (z *ZitiServerHelper) IsOnlyListener() bool {
 	return *z.zitiConfig.ZitiOnly
 }
 
-var _ ServerHelper = (*ZitiServerHelper)(nil)
+var _ helper.ServerHelper = (*ZitiServerHelper)(nil)
